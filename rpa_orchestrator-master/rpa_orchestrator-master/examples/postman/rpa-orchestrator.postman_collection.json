@@ -1,0 +1,115 @@
+{
+  "info": {
+    "name": "RPA Orchestrator Local",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:8001"
+    },
+    {
+      "key": "flow_id",
+      "value": ""
+    },
+    {
+      "key": "execution_id",
+      "value": ""
+    }
+  ],
+  "item": [
+    {
+      "name": "Health Check",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/api/v1/health"
+      }
+    },
+    {
+      "name": "Create SEO Flow",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/flows",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"flow_type\": \"commercial_page_seo\",\n  \"queue_execution_id\": 36,\n  \"campaign_page_id\": 123,\n  \"page_url\": \"https://example.com/servicio-bogota\",\n  \"campaign\": \"campana-local\",\n  \"commercial_objective\": \"Captar leads desde pagina comercial local\",\n  \"requested_capability\": \"seo.main\",\n  \"payload\": {\n    \"city\": \"Bogota\",\n    \"service\": \"Servicio principal\",\n    \"wordpress_page_id\": 123\n  },\n  \"correlation_id\": \"demo-flow-001\"\n}"
+        }
+      }
+    },
+    {
+      "name": "Get Flow",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/api/v1/flows/{{flow_id}}"
+      }
+    },
+    {
+      "name": "Get Flow Steps",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/api/v1/flows/{{flow_id}}/steps"
+      }
+    },
+    {
+      "name": "Advance Flow",
+      "request": {
+        "method": "POST",
+        "url": "{{base_url}}/api/v1/flows/{{flow_id}}/advance"
+      }
+    },
+    {
+      "name": "Get Execution",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/api/v1/executions/{{execution_id}}"
+      }
+    },
+    {
+      "name": "Get Execution Input",
+      "request": {
+        "method": "GET",
+        "url": "{{base_url}}/api/v1/executions/{{execution_id}}/input"
+      }
+    },
+    {
+      "name": "Submit Execution Result",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/executions/{{execution_id}}/result",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"status\": \"succeeded\",\n  \"payload\": {\n    \"summary\": \"Etapa completada correctamente\",\n    \"data\": {\n      \"example\": true\n    }\n  }\n}"
+        }
+      }
+    },
+    {
+      "name": "Manual Dispatch Execution",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "url": "{{base_url}}/api/v1/executions",
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"execution_id\": \"{{execution_id}}\"\n}"
+        }
+      }
+    }
+  ]
+}

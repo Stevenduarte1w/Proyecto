@@ -1,0 +1,194 @@
+pipeline {
+    agent any
+
+    options {
+        disableConcurrentBuilds()
+        timestamps()
+        // Red de seguridad: con disableConcurrentBuilds, un build colgado
+        // tambien encola todos los despliegues siguientes.
+        timeout(time: 45, unit: 'MINUTES')
+    }
+
+    environment {
+        COMPOSE_PROJECT_NAME = 'rpa-orchestrator'
+        DOCKER_BUILDKIT = '1'
+        MONGO_IMAGE = 'mongo:4.4'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Preparar entorno') {
+            steps {
+                withCredentials([
+                    file(
+                        credentialsId: 'rpa-orchestrator-env',
+                        variable: 'RPA_ORCHESTRATOR_ENV_FILE'
+                    )
+                ]) {
+                    sh '''
+                        set -eu
+                        umask 077
+                        cp "$RPA_ORCHESTRATOR_ENV_FILE" .env
+                        test -s .env
+                    '''
+                }
+            }
+        }
+
+        stage('Validar entorno') {
+            steps {
+                sh '''
+                    set -eu
+                    docker run --rm \
+                        --volume "$WORKSPACE:/workspace:ro" \
+                        --workdir /workspace \
+                        --entrypoint python3 \
+                        ghcr.io/astral-sh/uv:python3.12-bookworm-slim \
+                        scripts/check_env_file.py .env
+                    docker compose --env-file .env config --quiet
+                '''
+            }
+        }
+
+        stage('Pruebas unitarias') {
+            steps {
+                sh '''
+                    docker run --rm \
+                        --volume "$WORKSPACE:/workspace:ro" \
+                        --workdir /workspace \
+                        --env UV_PROJECT_ENVIRONMENT=/tmp/venv \
+                        --env UV_CACHE_DIR=/tmp/uv-cache \
+                        --entrypoint sh \
+                        ghcr.io/astral-sh/uv:python3.12-bookworm-slim \
+                        -c 'uv sync --frozen --extra dev && uv run --frozen pytest -q -p no:cacheprovider tests/unit'
+                '''
+            }
+        }
+
+        stage('Construir') {
+            steps {
+                sh 'docker compose --env-file .env build --pull'
+            }
+        }
+
+        stage('Desplegar') {
+            steps {
+                sh '''
+                    set -eu
+
+                    docker compose --env-file .env up -d mongo redis
+
+                    attempts=0
+                    until [ "$(docker inspect --format='{{.State.Health.Status}}' rpa-orchestrator-mongo 2>/dev/null || true)" = "healthy" ] \
+                        && [ "$(docker inspect --format='{{.State.Health.Status}}' rpa-orchestrator-redis 2>/dev/null || true)" = "healthy" ]
+                    do
+                        attempts=$((attempts + 1))
+                        if [ "$attempts" -ge 30 ]; then
+                            echo "MongoDB o Redis no estuvieron saludables dentro del tiempo esperado."
+                            docker compose --env-file .env ps -a
+                            docker compose --env-file .env logs --no-color --tail=100 mongo redis
+                            exit 1
+                        fi
+                        sleep 2
+                    done
+
+                    # Migra de Mongo sin autenticacion sin eliminar el volumen existente.
+                    set +x
+                    mongo_username="$(sed -n 's/^MONGO_USERNAME=//p' .env | tr -d '\\r')"
+                    mongo_password="$(sed -n 's/^MONGO_PASSWORD=//p' .env | tr -d '\\r')"
+                    docker cp docker/mongo-bootstrap-user.js \
+                        rpa-orchestrator-mongo:/tmp/mongo-bootstrap-user.js
+
+                    if ! docker exec rpa-orchestrator-mongo \
+                        mongo admin --quiet \
+                        --username "$mongo_username" \
+                        --password "$mongo_password" \
+                        --authenticationDatabase admin \
+                        --eval "quit(db.adminCommand('ping').ok ? 0 : 1)" \
+                        >/dev/null 2>&1
+                    then
+                        if ! docker exec \
+                            -e MONGO_BOOTSTRAP_USERNAME="$mongo_username" \
+                            -e MONGO_BOOTSTRAP_PASSWORD="$mongo_password" \
+                            rpa-orchestrator-mongo \
+                            sh -lc '
+                                mongo admin --quiet \
+                                    --username "$MONGO_INITDB_ROOT_USERNAME" \
+                                    --password "$MONGO_INITDB_ROOT_PASSWORD" \
+                                    --authenticationDatabase admin \
+                                    /tmp/mongo-bootstrap-user.js
+                            ' >/dev/null 2>&1
+                        then
+                            docker exec \
+                                -e MONGO_BOOTSTRAP_USERNAME="$mongo_username" \
+                                -e MONGO_BOOTSTRAP_PASSWORD="$mongo_password" \
+                                rpa-orchestrator-mongo \
+                                mongo admin --quiet \
+                                /tmp/mongo-bootstrap-user.js >/dev/null
+                        fi
+                    fi
+                    unset mongo_username mongo_password
+                    set -x
+
+                    docker compose --env-file .env up -d --no-deps --remove-orphans orchestrator
+                '''
+            }
+        }
+
+        stage('Verificar salud') {
+            steps {
+                sh '''
+                    set -eu
+
+                    contenedor=rpa-orchestrator-api
+                    limite=180
+
+                    reinicios_previos="$(docker inspect --format='{{.RestartCount}}' "$contenedor" 2>/dev/null || true)"
+                    reinicios_previos="${reinicios_previos:-0}"
+                    fin=$(( $(date +%s) + limite ))
+
+                    # timeout acota cada sondeo. Sin el, un "docker compose exec"
+                    # colgado bloquea la etapa para siempre: el until nunca cierra
+                    # la iteracion, asi que el corte por reintentos no se evalua.
+                    until timeout 8 docker compose --env-file .env exec -T orchestrator \
+                        python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health', timeout=3)" \
+                        >/dev/null 2>&1
+                    do
+                        # docker inspect devuelve exit 1 y stdout vacio si el
+                        # contenedor no existe, de ahi la guarda por valor vacio.
+                        estado="$(docker inspect --format='{{.State.Status}}' "$contenedor" 2>/dev/null || true)"
+                        estado="${estado:-ausente}"
+                        reinicios="$(docker inspect --format='{{.RestartCount}}' "$contenedor" 2>/dev/null || true)"
+                        reinicios="${reinicios:-0}"
+
+                        if [ "$estado" != "running" ]; then
+                            echo "El contenedor no esta corriendo (estado=$estado); no tiene sentido seguir esperando."
+                        elif [ "$reinicios" -gt "$reinicios_previos" ]; then
+                            echo "El contenedor se reinicio (reinicios=$reinicios); la API no llega a levantar."
+                        elif [ "$(date +%s)" -ge "$fin" ]; then
+                            echo "La API no estuvo saludable dentro de ${limite}s."
+                        else
+                            sleep 2
+                            continue
+                        fi
+
+                        docker compose --env-file .env ps -a
+                        docker compose --env-file .env logs --no-color --tail=200 orchestrator
+                        exit 1
+                    done
+                '''
+            }
+        }
+    }
+
+    post {
+        always {
+            sh 'rm -f .env'
+        }
+    }
+}

@@ -1,0 +1,25 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Visual Studio Code
+.vscode/
+
+# Environment variables
+.env
+
+# Ruff cache
+.ruff_cache
+
+# Error folders
+errors
+optimize_errors
+/app/static/images/
+*.log

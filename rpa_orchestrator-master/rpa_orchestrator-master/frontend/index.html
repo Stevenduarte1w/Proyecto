@@ -1,0 +1,536 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SEO Orchestrator Dashboard</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/dashboard/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>SEO Dashboard — Auditoría, Posicionamiento y Benchmark</h1>
+    <div class="top-actions">
+      <span id="api-status" class="pill neutral">Conectando</span>
+      <button id="reload-all" class="button secondary">Recargar</button>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section class="stats">
+      <article class="stat card pending"><strong id="stat-pages">0</strong><span>Páginas visibles</span></article>
+      <article class="stat card queued"><strong id="stat-queued">0</strong><span>En cola</span></article>
+      <article class="stat card running"><strong id="stat-running">0</strong><span>Ejecutando</span></article>
+      <article class="stat card success"><strong id="stat-success">0</strong><span>Completadas</span></article>
+      <article class="stat card danger"><strong id="stat-failed">0</strong><span>Fallidas</span></article>
+    </section>
+
+    <nav class="workspace-tabs" aria-label="Interfaz principal">
+      <button class="workspace-tab active" data-view="operations">Operaciones SEO</button>
+      <button class="workspace-tab" data-view="admin-data">Datos base</button>
+      <button class="workspace-tab" data-view="post-groups">Posts por campaña</button>
+      <button class="workspace-tab" data-view="post-monitor">Bot de posts</button>
+    </nav>
+
+    <div id="view-operations" class="workspace-view active">
+    <section class="filters card">
+      <div class="field">
+        <label for="global-campaign">Campaña</label>
+        <select id="global-campaign">
+          <option value="">Todas las campañas</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="global-page-type">Tipo de página</label>
+        <select id="global-page-type">
+          <option value="">Todos</option>
+          <option value="home">Home</option>
+          <option value="service">Servicio</option>
+          <option value="service_city">Servicio + ciudad</option>
+        </select>
+      </div>
+      <div class="field grow">
+        <label for="page-search">Buscar página</label>
+        <input id="page-search" placeholder="Slug, keyword o URL">
+      </div>
+      <button id="clear-filters" class="button ghost">Limpiar filtros</button>
+    </section>
+
+    <section class="card panel">
+      <div class="panel-head">
+        <h2>📌 Páginas registradas en BD</h2>
+        <div class="row-actions">
+          <button id="schedule-selected" class="button primary">Programar seleccionadas</button>
+          <button id="reload-pages" class="button dark">↺ Recargar</button>
+        </div>
+      </div>
+      <div class="db-main-grid">
+        <div>
+          <div class="schedule-bar">
+            <div class="sbar-field">
+              <label for="schedule-date">Fecha de programación</label>
+              <input id="schedule-date" type="date">
+            </div>
+            <div class="sbar-field grow">
+              <label for="schedule-notes">Notas</label>
+              <input id="schedule-notes" value="Programada desde dashboard">
+            </div>
+            <div class="sbar-field limit">
+              <label for="daily-limit">Límite daily</label>
+              <input id="daily-limit" type="number" min="1" max="100" value="10">
+            </div>
+            <div class="sbar-field mode">
+              <label for="support-posts-mode">Posts</label>
+              <select id="support-posts-mode">
+                <option value="auto">Auto</option>
+                <option value="state_defined">Estado definido</option>
+                <option value="legacy_two">Legacy 2</option>
+                <option value="none">Sin posts</option>
+              </select>
+            </div>
+          </div>
+          <div id="pages-message"></div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th><input id="select-all-pages" type="checkbox"></th>
+                  <th>ID</th>
+                  <th>Campaña</th>
+                  <th>Página</th>
+                  <th>Keyword</th>
+                  <th>Tipo</th>
+                  <th>Ubicación</th>
+                  <th>Estado</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="pages-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <form id="page-form" class="form-panel">
+          <input type="hidden" id="page-form-id" name="campaign_page_id" value="">
+          <div class="form-panel-header">
+            <span class="form-panel-icon" id="page-form-icon">➕</span>
+            <h3 id="page-form-title">Agregar página a campaign_pages</h3>
+            <span class="fph-sub" id="page-form-mode">* requerido</span>
+          </div>
+          <div class="form-body">
+            <div class="fgroup fg-blue">
+              <div class="fgroup-title"><span class="fgroup-icon">🏢</span>Campaña y servicio</div>
+              <div class="frow cols-2">
+                <div class="ffield"><label>Campaña <span class="req">*</span></label><select name="campaign_id" id="form-campaign" required></select></div>
+                <div class="ffield"><label>Servicio <span class="opt">(opcional)</span></label><select name="service_id" id="form-service"><option value="">Sin servicio</option></select></div>
+              </div>
+              <div class="frow cols-2">
+                <div class="ffield"><label>Alcance del servicio</label><select name="service_scope"><option value="single">Único</option><option value="all">Todos</option></select></div>
+                <div class="ffield"><label>WP Page ID <span class="opt">(opcional)</span></label><input name="wp_page_id" type="number" min="1" placeholder="ej. 1234"></div>
+              </div>
+            </div>
+
+            <div class="fgroup fg-green">
+              <div class="fgroup-title"><span class="fgroup-icon">🌐</span>URL e identificadores</div>
+              <div class="frow cols-1">
+                <div class="ffield"><label>URL completa <span class="req">*</span></label><input id="form-url" name="url" type="url" required placeholder="https://dominio.com/mi-pagina/"></div>
+              </div>
+              <div class="frow cols-2">
+                <div class="ffield"><label>Slug <span class="opt">(se guarda y no lo cambia ningún bot)</span></label><input id="form-slug" name="slug" placeholder="mi-pagina"></div>
+                <div class="ffield"><label>Tipo de página</label><select name="page_type"><option value="service_city">Servicio + ciudad</option><option value="service">Servicio</option><option value="home">Home</option></select></div>
+              </div>
+              <div class="frow cols-2">
+                <div class="ffield"><label>Idioma</label><select name="language"><option value="es">Español</option><option value="en">Inglés</option></select></div>
+                <div class="ffield"><label>Estado</label><select name="status"><option value="pending">Pendiente</option><option value="active">Activo</option><option value="published">Publicado</option></select></div>
+              </div>
+            </div>
+
+            <div class="fgroup fg-purple">
+              <div class="fgroup-title"><span class="fgroup-icon">🔍</span>Keywords</div>
+              <div class="frow cols-1">
+                <div class="ffield"><label>Keyword principal <span class="req">*</span></label><input name="primary_keyword" required placeholder="ej. Limpieza Espiritual en Chicago, IL"></div>
+              </div>
+              <div class="frow cols-1">
+                <div class="ffield"><label>Keywords secundarias <span class="opt">(una por línea o separadas por coma)</span></label><textarea name="secondary_keywords" placeholder="keyword secundaria 1&#10;keyword secundaria 2"></textarea></div>
+              </div>
+            </div>
+
+            <div class="fgroup fg-amber">
+              <div class="fgroup-title"><span class="fgroup-icon">📍</span>Ubicación geográfica</div>
+              <div class="frow cols-2">
+                <div class="ffield"><label>Ciudad o barrio</label><input name="city" placeholder="Chicago"><span class="fhint">Ciudad principal o barrio de la página.</span></div>
+                <div class="ffield"><label>Estado / Región</label><input name="state" placeholder="IL"></div>
+              </div>
+              <div class="frow cols-3">
+                <div class="ffield"><label>País</label><input name="country" value="US"></div>
+                <div class="ffield"><label>Código postal <span class="opt">(opcional)</span></label><input name="postal_code" placeholder="60505"></div>
+                <div class="ffield"><label>Tipo de ubicación</label><select name="location_type" id="form-location-type"><option value="city">Ciudad</option><option value="neighborhood">Barrio</option><option value="general">General</option></select></div>
+              </div>
+              <div class="frow cols-2">
+                <div class="ffield"><label>Nombre de ubicación objetivo</label><input name="target_location_name" placeholder="Chicago, IL"></div>
+                <div class="ffield hidden" id="form-parent-city-wrap"><label>Ciudad padre <span class="req">*</span></label><input name="parent_city" id="form-parent-city" placeholder="Chicago"><span class="fhint">Solo para barrios.</span></div>
+              </div>
+              <div class="frow cols-1">
+                <div class="ffield"><label>URL Google Maps <span class="opt">(opcional)</span></label><input name="target_google_maps_url" placeholder="https://maps.app.goo.gl/..."><span class="fhint">Se usa para los datos de ubicación local.</span></div>
+              </div>
+            </div>
+
+            <div class="fgroup fg-slate">
+              <div class="fgroup-title"><span class="fgroup-icon">🚚</span>Modalidad y configuración</div>
+              <div class="frow cols-2">
+                <div class="ffield"><label>Modo de entrega</label><select name="delivery_mode"><option value="onsite">Presencial</option><option value="remote">A distancia</option><option value="hybrid">Híbrido</option><option value="unknown">Sin especificar</option></select></div>
+                <div class="ffield"><label>Segmento de cliente</label><select name="customer_segment"><option value="unknown">Desconocido</option><option value="residential">Residencial</option><option value="commercial">Comercial</option><option value="both">Residencial y comercial</option><option value="not_applicable">No aplica</option></select></div>
+              </div>
+              <div class="frow cols-3">
+                <div class="toggle-group"><label>Permite remoto</label><div class="toggle-opts"><button type="button" class="toggle-option" data-target="form-allows-remote" data-value="true">Sí</button><button type="button" class="toggle-option active-no" data-target="form-allows-remote" data-value="false">No</button><button type="button" class="toggle-option" data-target="form-allows-remote" data-value="">N/D</button></div><input type="hidden" id="form-allows-remote" name="allows_remote" value="false"></div>
+                <div class="toggle-group"><label>Permite presencial</label><div class="toggle-opts"><button type="button" class="toggle-option active-yes" data-target="form-allows-onsite" data-value="true">Sí</button><button type="button" class="toggle-option" data-target="form-allows-onsite" data-value="false">No</button><button type="button" class="toggle-option" data-target="form-allows-onsite" data-value="">N/D</button></div><input type="hidden" id="form-allows-onsite" name="allows_onsite" value="true"></div>
+                <div class="toggle-group"><label>Visita física requerida</label><div class="toggle-opts"><button type="button" class="toggle-option active-yes" data-target="form-physical" data-value="true">Sí</button><button type="button" class="toggle-option" data-target="form-physical" data-value="false">No</button><button type="button" class="toggle-option" data-target="form-physical" data-value="">N/D</button></div><input type="hidden" id="form-physical" name="physical_visit_required" value="true"></div>
+              </div>
+              <div class="frow cols-1 toggle-publish-row">
+                <div class="toggle-group"><label>Permitir publicación automática</label><div class="toggle-opts publish"><button type="button" class="toggle-option active-yes" data-target="form-allow-publish" data-value="true">Sí</button><button type="button" class="toggle-option" data-target="form-allow-publish" data-value="false">No</button></div><input type="hidden" id="form-allow-publish" name="allow_publish" value="true"></div>
+              </div>
+            </div>
+
+            <div class="fgroup fg-teal">
+              <div class="fgroup-title"><span class="fgroup-icon">🧩</span>WordPress: jerarquía y plantilla</div>
+              <p class="fhint fgroup-hint">El layout, el canal de YouTube y el formulario se heredan de la campaña. Completa estos campos solo para excepciones de esta página.</p>
+              <div class="frow cols-2">
+                <div class="ffield"><label>Página padre <span class="opt">(opcional)</span></label><select name="parent_campaign_page_id" id="form-parent-page"><option value="">Sin página padre</option></select><span class="fhint">El sistema resuelve el parent_wp_page_id.</span></div>
+                <div class="ffield"><label>Slug del padre <span class="opt">(si no está registrado)</span></label><input name="parent_slug" id="form-parent-slug" placeholder="fences"></div>
+              </div>
+              <div class="frow cols-2">
+                <div class="toggle-group"><label>El padre debe existir</label><div class="toggle-opts"><button type="button" class="toggle-option" data-target="form-parent-required" data-value="true">Sí</button><button type="button" class="toggle-option active-no" data-target="form-parent-required" data-value="false">No</button></div><input type="hidden" id="form-parent-required" name="parent_required" value="false"></div>
+                <div class="ffield"><label>Plantilla de página</label><input name="page_template" id="form-page-template" value="elementor_header_footer"></div>
+              </div>
+              <div class="frow cols-2">
+                <div class="ffield"><label>Elementor form ID <span class="opt">(sobrescribe campaña)</span></label><input name="elementor_form_id" placeholder="a1b2c3d"></div>
+                <div class="ffield"><label>Canal de YouTube <span class="opt">(sobrescribe campaña)</span></label><input name="youtube_channel_id" pattern="UC[A-Za-z0-9_-]+" title="Usa el ID del canal que empieza por UC, no la URL completa" placeholder="UCxxxxxxxx"></div>
+              </div>
+              <div class="frow cols-2">
+                <div class="ffield"><label>Layout ID <span class="opt">(sobrescribe campaña)</span></label><input name="layout_id" type="number" min="1" placeholder="23"></div>
+                <div class="ffield"><label>Rama del layout <span class="opt">(sobrescribe campaña)</span></label><select name="layout_branch"><option value="">Heredar de campaña</option><option value="cities">cities</option><option value="services">services</option></select></div>
+              </div>
+            </div>
+          </div>
+          <div class="form-footer original">
+            <div class="form-hint-txt">La página se registra en la base de datos.<br>Luego puedes ejecutarla o programarla.</div>
+            <button class="button ghost" id="page-cancel-edit" type="button" hidden>Cancelar edición</button>
+            <button class="btn-save" type="submit" id="page-form-submit">Guardar página →</button>
+          </div>
+        </form>
+      </div>
+    </section>
+
+    <section class="card panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">IMPORTACIÓN</p>
+          <h2>Importar páginas y programación desde Excel</h2>
+        </div>
+        <div class="row-actions">
+          <a class="button ghost" href="/api/v1/seo/pages/import-template" download>⬇ Descargar plantilla</a>
+          <input id="xlsx-file" type="file" accept=".xlsx">
+          <button id="validate-xlsx" class="button secondary">Validar</button>
+          <button id="import-xlsx" class="button primary">Importar</button>
+        </div>
+      </div>
+      <p class="helper">La plantilla trae la hoja <code>programacion</code> con las 5 columnas obligatorias (<code>campaign_slug</code>, <code>url</code>, <code>page_type</code>, <code>primary_keyword</code>, <code>scheduled_for</code>) y las opcionales de ubicación, jerarquía de WordPress y plantilla. La hoja <code>guia</code> describe cada columna. Valida antes de importar.</p>
+      <div id="xlsx-result"></div>
+    </section>
+
+    <section class="card panel">
+      <div class="panel-head">
+        <div>
+          <p class="eyebrow">PAGE_EXECUTION_QUEUE</p>
+          <h2>Cola de ejecución</h2>
+        </div>
+        <div class="row-actions">
+          <select id="queue-view"><option value="active">Activa</option><option value="history">Historial</option><option value="all">Todas</option></select>
+          <button id="run-daily" class="button dark">Ejecutar daily</button>
+          <button id="reload-queue" class="button secondary">Recargar</button>
+        </div>
+      </div>
+      <div id="queue-message"></div>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>ID</th><th>Campaña</th><th>Página</th><th>Disparador</th><th>Fecha</th><th>Estado</th><th>Resultado</th><th>Intentos</th><th>Inicio / fin</th><th>Error / advertencia</th><th>Acciones</th></tr>
+          </thead>
+          <tbody id="queue-body"></tbody>
+        </table>
+      </div>
+    </section>
+    </div>
+
+    <section id="view-admin-data" class="workspace-view">
+      <section class="card panel admin-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">ADMINISTRACIÓN</p>
+            <h2>Datos base de campañas</h2>
+          </div>
+          <div class="row-actions">
+            <button id="admin-new" class="button secondary">Nuevo registro</button>
+            <button id="admin-reload" class="button dark">Recargar</button>
+          </div>
+        </div>
+        <div class="admin-resource-tabs" id="admin-resource-tabs"></div>
+        <div class="admin-layout">
+          <section class="admin-table-panel">
+            <div id="admin-message"></div>
+            <div class="table-wrap admin-table-wrap">
+              <table>
+                <thead id="admin-table-head"></thead>
+                <tbody id="admin-table-body"></tbody>
+              </table>
+            </div>
+          </section>
+          <form id="admin-form" class="form-panel admin-form">
+            <div class="form-panel-header">
+              <span class="form-panel-icon">DB</span>
+              <h3 id="admin-form-title">Nuevo registro</h3>
+              <span class="fph-sub" id="admin-form-mode">insertar</span>
+            </div>
+            <div class="form-body">
+              <div id="admin-fields" class="admin-fields"></div>
+            </div>
+            <div class="form-footer original">
+              <button class="button danger" id="admin-delete" type="button" disabled>Borrar</button>
+              <button class="button ghost" id="admin-cancel-edit" type="button">Limpiar</button>
+              <button class="btn-save" type="submit">Guardar</button>
+            </div>
+          </form>
+        </div>
+      </section>
+    </section>
+
+    <section id="view-post-groups" class="workspace-view">
+      <section class="filters card">
+        <div class="field">
+          <label for="group-campaign">Campaña</label>
+          <select id="group-campaign"><option value="">Todas las campañas</option></select>
+        </div>
+        <div class="field">
+          <label for="group-post-status">Estado del post</label>
+          <select id="group-post-status">
+            <option value="">Todos</option>
+            <option value="empty">Sin definir</option>
+            <option value="defined">Definido</option>
+            <option value="creating">Creando</option>
+            <option value="published">Publicado</option>
+            <option value="failed">Fallido</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="group-state">Estado / Región</label>
+          <input id="group-state" placeholder="IL" maxlength="10">
+        </div>
+        <div class="field grow">
+          <label for="group-search">Buscar</label>
+          <input id="group-search" placeholder="Región, título, keyphrase o ciudad">
+        </div>
+        <button id="group-clear-filters" class="button ghost">Limpiar filtros</button>
+      </section>
+
+      <section class="card panel admin-panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">SUPPORT_POST_GROUPS</p>
+            <h2>Posts de apoyo y grupos de ciudades</h2>
+          </div>
+          <div class="row-actions">
+            <button id="group-new" class="button secondary">Nuevo grupo</button>
+            <button id="group-reload" class="button dark">↺ Recargar</button>
+          </div>
+        </div>
+        <p class="helper">Cada grupo define un post de apoyo y las ciudades que lo comparten. El bot toma de aquí el post que enlaza a las páginas de esas ciudades.</p>
+        <div class="admin-layout">
+          <section class="admin-table-panel">
+            <div id="group-message"></div>
+            <div class="table-wrap admin-table-wrap">
+              <table>
+                <thead>
+                  <tr><th>ID</th><th>Campaña</th><th>Región</th><th>Tipo</th><th>Ciudades</th><th>Post</th><th>Estado</th><th>Prioridad</th><th>Acciones</th></tr>
+                </thead>
+                <tbody id="group-body"></tbody>
+              </table>
+            </div>
+          </section>
+
+          <form id="group-form" class="form-panel admin-form">
+            <input type="hidden" id="group-form-id" value="">
+            <div class="form-panel-header">
+              <span class="form-panel-icon">📝</span>
+              <h3 id="group-form-title">Nuevo grupo de posts</h3>
+              <span class="fph-sub" id="group-form-mode">insertar</span>
+            </div>
+            <div class="form-body">
+              <div class="fgroup fg-blue">
+                <div class="fgroup-title"><span class="fgroup-icon">🏢</span>Grupo</div>
+                <div class="frow cols-2">
+                  <div class="ffield"><label>Campaña <span class="req">*</span></label><select name="campaign_id" id="group-form-campaign" required></select></div>
+                  <div class="ffield"><label>Estado <span class="req">*</span></label><input name="state" id="group-form-state" required placeholder="IL" maxlength="10"></div>
+                </div>
+                <div class="frow cols-1">
+                  <div class="ffield"><label>Nombre de la región <span class="req">*</span></label><input name="region_name" required placeholder="Chicago Metro Amarres"><span class="fhint">Debe ser único por campaña y estado.</span></div>
+                </div>
+                <div class="frow cols-3">
+                  <div class="ffield"><label>Tipo de grupo</label><select name="group_type"><option value="regional">Regional</option><option value="state_general">Estado general</option><option value="metro">Metro</option><option value="county">Condado</option><option value="custom">Personalizado</option></select></div>
+                  <div class="ffield"><label>Prioridad</label><input name="priority" type="number" min="0" max="1000" value="100"></div>
+                  <div class="ffield"><label>Estado del grupo</label><select name="status"><option value="active">Activo</option><option value="paused">Pausado</option><option value="archived">Archivado</option></select></div>
+                </div>
+              </div>
+
+              <div class="fgroup fg-purple">
+                <div class="fgroup-title"><span class="fgroup-icon">📰</span>Post de apoyo</div>
+                <div class="frow cols-1">
+                  <div class="ffield"><label>Título del post</label><input name="post_title" placeholder="Amarre de Amor o Hechizo: Cuál es la Diferencia en Illinois"></div>
+                </div>
+                <div class="frow cols-2">
+                  <div class="ffield"><label>Keyphrase</label><input name="keyphrase" placeholder="amarre de amor o hechizo"></div>
+                  <div class="ffield"><label>Slug</label><input name="slug" placeholder="amarre-amor-hechizo-illinois"></div>
+                </div>
+                <div class="frow cols-2">
+                  <div class="ffield"><label>Categoría</label><input name="post_category" placeholder="Amarres"></div>
+                  <div class="ffield"><label>Estado del post</label><select name="post_status"><option value="empty">Sin definir</option><option value="defined">Definido</option><option value="creating">Creando</option><option value="published">Publicado</option><option value="failed">Fallido</option></select></div>
+                </div>
+                <div class="frow cols-1">
+                  <div class="ffield"><label>URL publicada <span class="opt">(la completa el bot)</span></label><input name="post_url" placeholder="https://dominio.com/blog/..."></div>
+                </div>
+              </div>
+
+              <div class="fgroup fg-amber">
+                <div class="fgroup-title"><span class="fgroup-icon">📍</span>Ciudades del grupo</div>
+                <div class="frow cols-1">
+                  <div class="ffield">
+                    <label>Una ciudad por línea</label>
+                    <textarea name="cities" id="group-form-cities" placeholder="Chicago&#10;Aurora, IL&#10;Naperville"></textarea>
+                    <span class="fhint">Sin estado en la línea se usa el estado del grupo. Las repetidas se descartan.</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="form-footer original">
+              <button class="button danger" id="group-delete" type="button" disabled>Borrar</button>
+              <button class="button ghost" id="group-cancel-edit" type="button">Limpiar</button>
+              <button class="btn-save" type="submit">Guardar grupo</button>
+            </div>
+          </form>
+        </div>
+      </section>
+    </section>
+
+    <section id="view-post-monitor" class="workspace-view">
+      <section class="post-monitor-stats">
+        <article class="stat card"><strong id="post-stat-runs">0</strong><span>Ejecuciones 24 h</span></article>
+        <article class="stat card success"><strong id="post-stat-success">0</strong><span>Exitosas</span></article>
+        <article class="stat card danger"><strong id="post-stat-failed">0</strong><span>Fallidas</span></article>
+        <article class="stat card pending"><strong id="post-stat-alerts">0</strong><span>Alertas abiertas</span></article>
+        <article class="stat card danger"><strong id="post-stat-critical">0</strong><span>Críticas</span></article>
+      </section>
+
+      <section class="card panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">CANAL INDEPENDIENTE</p>
+            <h2>Estado del bot de posts</h2>
+          </div>
+          <button id="post-monitor-reload" class="button dark">↺ Recargar</button>
+        </div>
+        <div id="post-monitor-status" class="post-monitor-status">
+          <span class="helper">El bot todavía no se ha registrado.</span>
+        </div>
+      </section>
+
+      <section class="card panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">UMBRALES DEL BOT</p>
+            <h2>Alertas</h2>
+          </div>
+          <div class="row-actions">
+            <select id="post-alert-status">
+              <option value="open">Abiertas</option>
+              <option value="">Todas</option>
+              <option value="acknowledged">Reconocidas</option>
+              <option value="resolved">Resueltas</option>
+              <option value="dismissed">Descartadas</option>
+            </select>
+            <select id="post-alert-severity">
+              <option value="">Toda severidad</option>
+              <option value="critical">Crítica</option>
+              <option value="warning">Advertencia</option>
+              <option value="info">Información</option>
+            </select>
+          </div>
+        </div>
+        <div id="post-monitor-message"></div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Fecha</th><th>Severidad</th><th>Post</th><th>Métrica</th><th>Valor / umbral</th><th>Mensaje</th><th>Estado</th><th>Acciones</th></tr>
+            </thead>
+            <tbody id="post-alerts-body"></tbody>
+          </table>
+        </div>
+      </section>
+
+      <section class="card panel">
+        <div class="panel-head">
+          <div>
+            <p class="eyebrow">RESULTADOS REPORTADOS</p>
+            <h2>Historial de ejecuciones independientes</h2>
+          </div>
+          <select id="post-run-status">
+            <option value="">Todos los estados</option>
+            <option value="succeeded">Exitosas</option>
+            <option value="failed">Fallidas</option>
+            <option value="partial">Parciales</option>
+            <option value="cancelled">Canceladas</option>
+          </select>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr><th>Finalización</th><th>Estado</th><th>Post</th><th>Duración</th><th>Resumen</th><th>Métricas</th><th>Error</th></tr>
+            </thead>
+            <tbody id="post-runs-body"></tbody>
+          </table>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <dialog id="execution-dialog">
+    <div class="dialog-head">
+      <div><p class="eyebrow">DETALLE DE EJECUCIÓN</p><h2 id="execution-title">Ejecución</h2><p id="execution-meta" class="helper"></p></div>
+      <button id="close-execution" class="modal-close" aria-label="Cerrar">✕</button>
+    </div>
+    <div class="tabs">
+      <button class="tab active" data-tab="artifacts">📂 Archivos JSON</button>
+      <button class="tab" data-tab="log">📋 Historial del bot</button>
+      <button class="tab" data-tab="summary">ℹ Metadata</button>
+    </div>
+    <div id="tab-artifacts" class="tab-panel active">
+      <div id="artifact-list" class="artifact-tabs"><span class="helper">Cargando archivos…</span></div>
+      <div class="artifact-layout">
+        <section class="artifact-readable">
+          <div class="json-toolbar"><div><span class="json-kicker">DOCUMENTO MONGODB</span><strong id="artifact-title">Selecciona un archivo</strong></div></div>
+          <div id="artifact-rendered" class="dynamic-json"><p class="helper">No hay un artefacto seleccionado.</p></div>
+        </section>
+        <section class="artifact-raw">
+          <div class="json-toolbar"><strong>JSON original</strong><button id="copy-json" class="button secondary">Copiar JSON</button></div>
+          <pre id="artifact-json">No hay un artefacto seleccionado.</pre>
+        </section>
+      </div>
+    </div>
+    <div id="tab-log" class="tab-panel"><div class="json-toolbar"><strong>Historial acumulado del bot para esta página</strong><button id="reload-log" class="button dark">↺ Recargar log</button></div><pre id="execution-log">Cargando...</pre></div>
+    <div id="tab-summary" class="tab-panel"><div class="metadata-view" id="execution-summary"></div></div>
+  </dialog>
+
+  <div id="toast" role="status"></div>
+  <script type="module" src="/dashboard/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,149 @@
+services:
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rpa-orchestrator-api
+    environment:
+      APP_NAME: "${APP_NAME:-RPA Orchestrator}"
+      APP_ENV: "${APP_ENV:-local}"
+      APP_DEBUG: "${APP_DEBUG:-true}"
+      API_V1_PREFIX: "${API_V1_PREFIX:-/api/v1}"
+      POSTGRES_DSN: "${POSTGRES_DSN:-postgresql+asyncpg://orchestrator:orchestrator@postgres:5432/orchestrator}"
+      SEO_AGENT_DSN: ${SEO_AGENT_DSN:-}
+      MONGO_DSN: "mongodb://${MONGO_USERNAME:?MONGO_USERNAME is required}:${MONGO_PASSWORD:?MONGO_PASSWORD is required}@mongo:27017/${MONGO_DATABASE:-seo_flows}?authSource=admin"
+      MONGO_DATABASE: "${MONGO_DATABASE:-seo_flows}"
+      REDIS_DSN: "redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379/0"
+      BOT_REQUEST_TIMEOUT_SECONDS: "${BOT_REQUEST_TIMEOUT_SECONDS:-30}"
+      BOT_MAX_RETRIES: "${BOT_MAX_RETRIES:-3}"
+      EXECUTION_LOCK_TTL_SECONDS: "${EXECUTION_LOCK_TTL_SECONDS:-900}"
+      BOT_PRESENCE_TTL_SECONDS: "${BOT_PRESENCE_TTL_SECONDS:-60}"
+      PAGE_EXECUTION_LOG_TTL_SECONDS: "${PAGE_EXECUTION_LOG_TTL_SECONDS:-86400}"
+      DASHBOARD_USER: ${DASHBOARD_USER:-}
+      DASHBOARD_PASS: ${DASHBOARD_PASS:-}
+      BOT_TOKENS: '${BOT_TOKENS:-{}}'
+      BOT_HEARTBEAT_GRACE_SECONDS: "${BOT_HEARTBEAT_GRACE_SECONDS:-60}"
+      BOT_RECONCILIATION_INTERVAL_SECONDS: "${BOT_RECONCILIATION_INTERVAL_SECONDS:-15}"
+      POST_MONITOR_WS_TOKEN: ${POST_MONITOR_WS_TOKEN:-}
+      POST_MONITOR_PRESENCE_TTL_SECONDS: "${POST_MONITOR_PRESENCE_TTL_SECONDS:-60}"
+      POST_MONITOR_MAX_MESSAGE_BYTES: "${POST_MONITOR_MAX_MESSAGE_BYTES:-262144}"
+      RANK_PROVIDER: "${RANK_PROVIDER:-serper}"
+      SERPER_API_KEY: ${SERPER_API_KEY:-}
+      SERPER_API_BASE_URL: "${SERPER_API_BASE_URL:-https://google.serper.dev}"
+      SERPER_RANK_NUM_RESULTS: "${SERPER_RANK_NUM_RESULTS:-100}"
+      SERPER_REQUEST_TIMEOUT_SECONDS: "${SERPER_REQUEST_TIMEOUT_SECONDS:-15}"
+      BRIGHTLOCAL_API_KEY: ${BRIGHTLOCAL_API_KEY:-}
+      BRIGHTLOCAL_API_BASE_URL: "${BRIGHTLOCAL_API_BASE_URL:-https://api.brightlocal.com}"
+      BRIGHTLOCAL_RANK_NUM_RESULTS: "${BRIGHTLOCAL_RANK_NUM_RESULTS:-100}"
+      BRIGHTLOCAL_RANK_TIMEOUT_SECONDS: "${BRIGHTLOCAL_RANK_TIMEOUT_SECONDS:-45}"
+      BRIGHTLOCAL_RANK_POLL_INTERVAL_SECONDS: "${BRIGHTLOCAL_RANK_POLL_INTERVAL_SECONDS:-1.5}"
+    ports:
+      - "8005:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  orchestrator-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: rpa-orchestrator-worker
+    command: ["worker"]
+    environment:
+      APP_NAME: "${APP_NAME:-RPA Orchestrator}"
+      APP_ENV: "${APP_ENV:-local}"
+      APP_DEBUG: "${APP_DEBUG:-true}"
+      API_V1_PREFIX: "${API_V1_PREFIX:-/api/v1}"
+      POSTGRES_DSN: "${POSTGRES_DSN:-postgresql+asyncpg://orchestrator:orchestrator@postgres:5432/orchestrator}"
+      SEO_AGENT_DSN: ${SEO_AGENT_DSN:-}
+      MONGO_DSN: "mongodb://${MONGO_USERNAME:?MONGO_USERNAME is required}:${MONGO_PASSWORD:?MONGO_PASSWORD is required}@mongo:27017/${MONGO_DATABASE:-seo_flows}?authSource=admin"
+      MONGO_DATABASE: "${MONGO_DATABASE:-seo_flows}"
+      REDIS_DSN: "redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379/0"
+      BOT_REQUEST_TIMEOUT_SECONDS: "${BOT_REQUEST_TIMEOUT_SECONDS:-30}"
+      BOT_MAX_RETRIES: "${BOT_MAX_RETRIES:-3}"
+      EXECUTION_LOCK_TTL_SECONDS: "${EXECUTION_LOCK_TTL_SECONDS:-900}"
+      BOT_PRESENCE_TTL_SECONDS: "${BOT_PRESENCE_TTL_SECONDS:-60}"
+      PAGE_EXECUTION_LOG_TTL_SECONDS: "${PAGE_EXECUTION_LOG_TTL_SECONDS:-86400}"
+      DASHBOARD_USER: ${DASHBOARD_USER:-}
+      DASHBOARD_PASS: ${DASHBOARD_PASS:-}
+      BOT_TOKENS: '${BOT_TOKENS:-{}}'
+      BOT_HEARTBEAT_GRACE_SECONDS: "${BOT_HEARTBEAT_GRACE_SECONDS:-60}"
+      BOT_RECONCILIATION_INTERVAL_SECONDS: "${BOT_RECONCILIATION_INTERVAL_SECONDS:-15}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mongo:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    profiles:
+      - worker
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: rpa-orchestrator-postgres
+    environment:
+      POSTGRES_USER: orchestrator
+      POSTGRES_PASSWORD: orchestrator
+      POSTGRES_DB: orchestrator
+    ports:
+      - "5434:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U orchestrator -d orchestrator"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongo:
+    image: "${MONGO_IMAGE:-mongo:7}"
+    container_name: rpa-orchestrator-mongo
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: "${MONGO_USERNAME:?MONGO_USERNAME is required}"
+      MONGO_INITDB_ROOT_PASSWORD: "${MONGO_PASSWORD:?MONGO_PASSWORD is required}"
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh --quiet --eval \"db.adminCommand({ ping: 1 })\" || mongo --quiet --eval \"db.adminCommand('ping')\"",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: rpa-orchestrator-redis
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?REDIS_PASSWORD is required}"
+    command:
+      [
+        "sh",
+        "-c",
+        "exec redis-server --appendonly yes --requirepass \"$$REDIS_PASSWORD\"",
+      ]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$$REDIS_PASSWORD\" ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  postgres-data:
+  mongo-data:
+  redis-data:
