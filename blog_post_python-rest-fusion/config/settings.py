@@ -23,8 +23,16 @@ class Settings(BaseSettings):
     IMAGE_OUTPUT_DIR: str = "app/static/images"
     SCHEDULER_ENABLED: bool = True
     SCHEDULER_TIMEZONE: str = "America/Bogota"
+    SCHEDULER_BATCH_SIZE: int = 20
+    LOCAL_MAX_CONCURRENCY: int = 3
     ORCHESTRATOR_ENABLED: bool = False
     ORCHESTRATOR_TOKEN: str = ""
+    POST_BOT_WS_URL: str = "ws://localhost:8005/api/v1/post-bot/ws"
+    POST_BOT_WS_TOKEN: str = ""
+    POST_BOT_BOT_KEY: str = "post-bot-prod-01"
+    POST_BOT_NAME: str = "AI WordPress Post Bot"
+    POST_BOT_CALLBACK_URL: str = "http://127.0.0.1:8000/api/orchestrator/jobs"
+    ORCHESTRATOR_MAX_CONCURRENCY: int = 2
 
     # Generar la URL de la base de datos
     @property

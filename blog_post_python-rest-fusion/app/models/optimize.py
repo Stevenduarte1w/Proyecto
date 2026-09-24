@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, DateTime, Text
+from sqlalchemy import Column, ForeignKey, Integer, String, DateTime, Text
 from sqlalchemy.orm import relationship
 from app.models.base import ModelBase
 
@@ -31,7 +31,6 @@ class OptimizedPost(ModelBase):
         Integer, ForeignKey("campaigns.id", ondelete="CASCADE"), nullable=False
     )
     campaign = relationship("Campaign", back_populates="optimized_posts")
-    status = Column(Boolean, default=False, nullable=False)
     wp_post_id = Column(Integer, nullable=True)
     wp_route = Column(String(16), nullable=True)
     slug = Column(String(255), nullable=True)
@@ -40,6 +39,7 @@ class OptimizedPost(ModelBase):
     attempts = Column(Integer, nullable=False, default=0)
     state = Column(String(24), nullable=False, default="pending", index=True)
     claimed_at = Column(DateTime, nullable=True)
+    optimized_at = Column(DateTime, nullable=True)
 
     def __repr__(self):
         return super().__repr__()

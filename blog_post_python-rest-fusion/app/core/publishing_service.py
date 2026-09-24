@@ -5,6 +5,7 @@ import logging
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -108,7 +109,7 @@ class PublishingService:
                          if request.external_id else None)
             if execution and execution.result:
                 try:
-                    partial = json.loads(execution.result)
+                    partial = execution.result
                     recovered = int(partial["wp_post_id"]) if partial.get("draft_created") else None
                 except (ValueError, TypeError, KeyError, json.JSONDecodeError):
                     recovered = None
@@ -150,7 +151,7 @@ class PublishingService:
             draft = wp.create_post(payload)
             post_id = int(draft["id"])
             if execution:
-                execution.result = json.dumps({"wp_post_id": post_id, "draft_created": True})
+                execution.result = {"wp_post_id": post_id, "draft_created": True}
                 self.db.commit()
             try:
                 if site.yoast_enabled:
@@ -169,17 +170,18 @@ class PublishingService:
 
     def optimize(self, optimized_post: OptimizedPost, *, content: str, meta_description: str,
                  image_path: str | None, external_link: str = "", create_category: bool = False,
-                 keep_slug: bool = True) -> dict[str, Any]:
+                 keep_slug: bool = True, execution: Execution | None = None) -> dict[str, Any]:
         site = self._site(optimized_post.campaign_id)
         with self._site_lock(site.id):
             return self._optimize_locked(optimized_post, site, content=content,
-                                         meta_description=meta_description, image_path=image_path,
-                                         external_link=external_link, create_category=create_category,
-                                         keep_slug=keep_slug)
+                                          meta_description=meta_description, image_path=image_path,
+                                          external_link=external_link, create_category=create_category,
+                                          keep_slug=keep_slug, execution=execution)
 
     def _optimize_locked(self, optimized_post: OptimizedPost, site: WordPressSite, *, content: str,
                          meta_description: str, image_path: str | None, external_link: str = "",
-                         create_category: bool = False, keep_slug: bool = True) -> dict[str, Any]:
+                         create_category: bool = False, keep_slug: bool = True,
+                         execution: Execution | None = None) -> dict[str, Any]:
         with WordPressClient(site) as wp:
             writable_meta = wp.preflight(site.yoast_enabled)
             ref = (PostRef(optimized_post.wp_route or "posts", int(optimized_post.wp_post_id))
@@ -215,9 +217,15 @@ class PublishingService:
             snapshot["meta"] = {key: current_meta[key] for key in meta_keys if key in current_meta}
             optimized_post.wp_post_id = ref.id
             optimized_post.wp_route = ref.route
-            if not optimized_post.previous_snapshot:
+            if execution is not None:
+                execution.result = {
+                    **(execution.result or {}),
+                    "wp_post_id": ref.id,
+                    "wp_route": ref.route,
+                    "snapshot": snapshot,
+                }
+            elif not optimized_post.previous_snapshot:
                 optimized_post.previous_snapshot = json.dumps(snapshot, ensure_ascii=False)
-            optimized_post.attempts = (optimized_post.attempts or 0) + 1
             self.db.commit()
             payload: dict[str, Any] = {
                 "title": optimized_post.title,
@@ -238,10 +246,18 @@ class PublishingService:
                 optimized_post.last_error = str(exc)[:4000]
                 self.db.commit()
                 raise
-            optimized_post.status = True
-            optimized_post.state = "succeeded"
-            optimized_post.last_error = None
-            optimized_post.claimed_at = None
+            if execution is None:
+                optimized_post.state = "done"
+                optimized_post.last_error = None
+                optimized_post.claimed_at = None
+                optimized_post.optimized_at = datetime.utcnow()
+            else:
+                execution.result = {
+                    **(execution.result or {}),
+                    "wp_post_id": ref.id,
+                    "wp_route": ref.route,
+                    "wp_post_url": updated.get("link"),
+                }
             self.db.commit()
         return {"wp_post_id": ref.id, "wp_post_url": updated.get("link"),
                 "media_id": media["id"] if media else None}

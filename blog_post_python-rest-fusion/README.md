@@ -9,7 +9,7 @@ El mismo servicio de publicación se usa en los dos canales:
 
 ## Preparación
 
-1. Crear una copia de `.env.example` llamada `.env` y configurar la base PostgreSQL, `OPENAI_API_KEY` y las opciones de operación.
+1. Crear una copia de `.env-example.example` llamada `.env` y configurar la base PostgreSQL, `OPENAI_API_KEY` y las opciones de operación.
 2. Crear una **Application Password** de WordPress para el usuario del bot en cada sitio. El usuario debe poder editar posts y subir medios. La contraseña normal de `wp-admin` no sirve para Basic Auth REST.
 3. Instalar `wordpress/mu-plugins/post-bot-meta.php` en cada sitio como `wp-content/mu-plugins/post-bot-meta.php`. Esto registra las metas REST de Yoast y Elementor que se escriben durante la optimización.
 4. Hacer una copia de seguridad de la base de datos anterior y ejecutar `alembic upgrade head`.
@@ -28,7 +28,9 @@ Los archivos Excel conservan las columnas de la versión anterior. `image_prompt
 
 ## Envío desde el orquestador
 
-Activa `ORCHESTRATOR_ENABLED=true` y configura un secreto largo en `ORCHESTRATOR_TOKEN`. El orquestador envía `Authorization: Bearer <token>` y un ID estable para deduplicar:
+Activa `ORCHESTRATOR_ENABLED=true` y configura `ORCHESTRATOR_TOKEN` para autenticar el callback local. Configura además `POST_BOT_WS_URL` y `POST_BOT_WS_TOKEN` para conectar el worker con la cola aislada del orquestador (`/api/v1/post-bot/ws`). El token del WebSocket debe corresponder a la entrada del bot en `BOT_TOKENS`; mantenlo separado del token del callback local. Al recibir un trabajo, el worker conserva su `execution_id` y reintenta el callback con ese mismo ID para que una respuesta perdida no publique dos veces.
+
+El worker recibe `posts.create` y `posts.optimize`, comunica inicio y resultado al orquestador y envía el contenido al endpoint local autenticado:
 
 ```http
 POST /api/orchestrator/jobs
@@ -59,7 +61,7 @@ Ejemplo de creación con contenido ya generado:
 
 Usa `capability: "posts.optimize"` y proporciona `edition_url` o `wp_post_id` para optimizar. El cuerpo y la imagen se preparan antes de actualizar el post, y se guarda una instantánea para `/api/optimized/{id}/rollback`. Envía `keep_featured_image: true` si debe conservar la imagen del post. Una repetición del mismo `job_id` y cuerpo devuelve el resultado guardado; reutilizar el ID con contenido distinto da `409`. Un lote puede devolver `partial_posts` y se reintentan solo sus elementos fallidos.
 
-Este ZIP no incluía el cliente/protocolo WebSocket del repositorio del orquestador. El canal incorporado aquí es una entrada HTTP autenticada para contenido completo. Para que el orquestador existente use su cola `/api/v1/post-bot/ws`, hay que adaptar el transporte en ese repositorio al contrato WebSocket publicado por el orquestador.
+El callback HTTP es interno del worker; no sustituye la cola WebSocket ni se debe llamar desde el navegador. El canal aislado del orquestador está documentado en `rpa_orchestrator-master/rpa_orchestrator-master/docs/post-bot-job-websocket.md`.
 
 ## Operación y API
 
@@ -69,6 +71,11 @@ Este ZIP no incluía el cliente/protocolo WebSocket del repositorio del orquesta
 - `POST /api/posts/upload/new` y `/api/posts/upload/optimized`
 - `POST /api/posts/{id}/run`, `/api/optimized/{id}/run`, `/api/optimized/{id}/rollback`
 - `GET /api/executions` y `GET /api/executions/{id}`
+- `GET /api/queue?kind=create|optimize&state=pending|claimed|running|done|failed`
 - `POST /api/orchestrator/jobs`
+
+La interfaz local de cola e historial se sirve en `/dashboard/`. La pestaña
+`Cola de posts` del dashboard del orquestador administra la cola distribuida
+aislada; son vistas distintas y consultan APIs distintas.
 
 WordPress se valida con `GET users/me` y `OPTIONS posts`. Las lecturas repetibles pueden reintentarse; las escrituras no se reenvían automáticamente para evitar duplicar posts o medios.

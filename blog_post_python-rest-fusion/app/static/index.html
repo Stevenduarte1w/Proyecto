@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Blog Post Bot · Operaciones</title>
+  <style>
+    :root{font:15px/1.5 system-ui,sans-serif;color:#17212b;background:#f4f6f8}body{margin:0}main{max-width:1200px;margin:auto;padding:24px}h1{margin:0 0 4px}.muted{color:#617181}.tabs{display:flex;gap:8px;margin:24px 0 16px}.tabs button,.action{border:0;border-radius:7px;padding:9px 14px;background:#e1e7ed;color:#162330;cursor:pointer}.tabs button.active,.action{background:#135e96;color:white}.panel{background:white;border:1px solid #dce3e9;border-radius:10px;padding:16px;margin:12px 0}.row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.row h2{flex:1}.scroll{overflow:auto}table{border-collapse:collapse;width:100%;min-width:760px}th,td{text-align:left;padding:10px;border-bottom:1px solid #e6ebef;vertical-align:top}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:420px;overflow:auto;margin:4px 0}select,input{padding:8px;border:1px solid #c7d1da;border-radius:6px}.pill{font-weight:600}.error{color:#b42318}.success{color:#067647}.view[hidden]{display:none}
+  </style>
+</head>
+<body><main>
+  <h1>Blog Post Bot</h1><div class="muted">Cola local e historial de ejecuciones</div>
+  <nav class="tabs"><button class="active" data-view="queue">Cola programada</button><button data-view="history">Historial</button></nav>
+  <section id="queue" class="view">
+    <div class="panel row"><label>Tipo <select id="kind"><option value="">Todos</option><option value="create">Crear</option><option value="optimize">Optimizar</option></select></label><label>Estado <select id="state"><option value="">Todos</option><option>pending</option><option>claimed</option><option>running</option><option>done</option><option>failed</option></select></label><button id="refresh-queue" class="action">Actualizar</button><span id="queue-message" class="muted"></span></div>
+    <div class="panel scroll"><table><thead><tr><th>Tipo</th><th>ID</th><th>Título</th><th>Fecha</th><th>Estado</th><th>Intentos</th><th>Error</th><th>WordPress</th></tr></thead><tbody id="queue-rows"></tbody></table></div>
+  </section>
+  <section id="history" class="view" hidden>
+    <div class="panel row"><label>Canal <select id="source"><option value="">Todos</option><option>scheduler</option><option>api</option><option>orchestrator</option></select></label><label>Estado <select id="execution-status"><option value="">Todos</option><option>queued</option><option>running</option><option>completed</option><option>failed</option></select></label><button id="refresh-history" class="action">Actualizar</button><span id="history-message" class="muted"></span></div>
+    <div class="panel scroll"><table><thead><tr><th>Inicio</th><th>Origen</th><th>Tipo</th><th>Título</th><th>Estado</th><th>Error</th><th>Detalle</th></tr></thead><tbody id="execution-rows"></tbody></table></div>
+    <div id="execution-detail" class="panel" hidden><h2>Detalle y log</h2><pre id="execution-json"></pre></div>
+  </section>
+</main><script src="/dashboard/dashboard.js" defer></script></body></html>

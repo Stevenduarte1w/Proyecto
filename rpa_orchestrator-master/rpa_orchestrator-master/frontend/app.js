@@ -12,4 +12,9 @@
   } catch (error) {
     console.error("No se pudo cargar la extensión de Instagram", error);
   }
+  try {
+    await import("/dashboard/post-bot.js");
+  } catch (error) {
+    console.error("No se pudo cargar la extensión de la cola de posts", error);
+  }
 })();

@@ -24,6 +24,9 @@ Pestañas disponibles:
 - `Datos base`: campañas, servicios, sitios WordPress y prompt rules.
 - `Posts por campaña`: grupos de posts de apoyo y sus ciudades.
 - `Bot de posts`: telemetría del bot independiente.
+- `Cola de posts`: administración de los trabajos distribuidos del canal
+  aislado `/api/v1/post-bot/*`. Es una extensión autocontenida en
+  `frontend/post-bot.js`; no reemplaza la pestaña de telemetría.
 
 El detalle de campos, columnas del Excel y endpoints está en
 [docs/campaign-pages-and-post-groups.md](../docs/campaign-pages-and-post-groups.md).
@@ -67,6 +70,11 @@ También se puede usar BrightLocal con `RANK_PROVIDER=brightlocal` y las variabl
 El botón `Consultar posición` muestra la posición orgánica exacta de la URL registrada.
 Si no existe una coincidencia entre los primeros resultados configurados, muestra
 `Fuera del top N`.
+
+La extensión de cola consulta overview, trabajos y workers con REST y Basic
+Auth de la sesión del dashboard. El WebSocket `/api/v1/post-bot/ws` es solo para
+el worker y nunca se abre desde el navegador. La extensión se carga desde
+`frontend/app.js` sin modificar `index.html`, `app.core.js` ni `styles.css`.
 
 ## Posts por campaña
 

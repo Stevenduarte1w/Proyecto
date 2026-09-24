@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, DateTime, Text
+from sqlalchemy import Column, ForeignKey, Integer, String, DateTime, Text
 from sqlalchemy.orm import relationship
 from app.models.base import ModelBase
 
@@ -32,11 +32,13 @@ class Post(ModelBase):
     )
     campaign = relationship("Campaign", back_populates="posts")
 
-    status = Column(Boolean, default=False, nullable=False)
     state = Column(String(24), nullable=False, default="pending", index=True)
     attempts = Column(Integer, nullable=False, default=0)
     last_error = Column(Text, nullable=True)
     claimed_at = Column(DateTime, nullable=True)
+    published_at = Column(DateTime, nullable=True)
+    wp_post_id = Column(Integer, nullable=True)
+    wp_post_url = Column(Text, nullable=True)
 
     def __repr__(self):
         return super().__repr__()

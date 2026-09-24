@@ -22,7 +22,6 @@ class PostCreate(BaseModel):
     image: str | None = None
     image_prompt: str | None = None
     categories: str | None = None
-    status: bool = False
 
 
 class PostUpdate(BaseModel):
@@ -43,7 +42,7 @@ class PostUpdate(BaseModel):
     image_prompt: str | None = None
     categories: str | None = None
     date: datetime | None = None
-    status: bool | None = None
+    state: str | None = None
 
 
 class PostResponse(BaseModel):
@@ -66,7 +65,12 @@ class PostResponse(BaseModel):
     categories: str | None = None
     date: datetime
     campaign_id: int
-    status: bool
+    state: str
+    attempts: int = 0
+    last_error: str | None = None
+    published_at: datetime | None = None
+    wp_post_id: int | None = None
+    wp_post_url: str | None = None
     created_at: datetime
     updated_at: datetime | None = None
 

@@ -93,6 +93,9 @@ docker compose run --rm orchestrator-worker
 - `POST /api/v1/bots` para registro administrativo/manual opcional
 - `WS /api/v1/bots/ws` para auto-registro y presencia viva de bots
 - `WS /api/v1/post-monitor/ws` para resultados y alertas del bot de posts independiente
+- `WS /api/v1/post-bot/ws` para la cola de trabajos aislada del bot de posts
+- `GET|POST /api/v1/post-bot/jobs`, `GET /api/v1/post-bot/overview` y
+  `GET /api/v1/post-bot/workers` para operar esa cola desde el dashboard
 - `GET /api/v1/post-monitor/overview`
 - `GET /api/v1/post-monitor/runs`
 - `GET /api/v1/post-monitor/alerts`
@@ -149,6 +152,12 @@ bot envia execution.started
 seo.main puede emitir execution.checkpoint sin terminar la ejecucion
 bot termina con execution.succeeded o execution.failed
 ```
+
+El canal `post-bot` asigna `posts.create` y `posts.optimize` sin entrar en el
+workflow SEO. La pestaña `Cola de posts` del dashboard consume sus rutas REST;
+la pestaña existente `Bot de posts` sigue mostrando telemetría. Ver
+[`docs/post-bot-job-websocket.md`](docs/post-bot-job-websocket.md) y
+[`frontend/README.md`](frontend/README.md).
 
 Contrato completo:
 

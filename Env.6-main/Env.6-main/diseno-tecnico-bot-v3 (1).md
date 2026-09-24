@@ -89,48 +89,24 @@ resultado. El núcleo no sabe de dónde viene el trabajo.
 
 ---
 
-## 4. Estructura de módulos propuesta
+## 4. Estructura de módulos implementada
 
 ```
 app/
-├── main.py                      # FastAPI + arranque de canales
-├── router.py                    # API HTTP (delgada)
-│
-├── channels/                    # ← NUEVO: los tres orígenes de trabajo
-│   ├── scheduler.py             #   SchedulerRunner (hora diaria, claim atómico)
-│   ├── orchestrator.py          #   OrchestratorChannel (WebSocket, independiente)
-│   └── manual.py                #   Disparos puntuales desde la API
-│
-├── core/                        # ← NUEVO: el núcleo compartido
-│   ├── publishing_service.py    #   publish() y optimize()
-│   ├── requests.py              #   PublishRequest / OptimizeRequest / Result
-│   └── worker_pool.py           #   ThreadPoolExecutor por canal
-│
+├── main.py                      # FastAPI + scheduler + worker WebSocket
+├── router.py                    # API HTTP y callback interno del worker
+├── scheduler.py                 # APScheduler + pool local
 ├── clients/
-│   ├── wordpress_client.py      # heredado de post-orquestador + métodos nuevos
-│   └── websocket_client.py      # heredado de post-orquestador, sin cambios
-│
-├── controllers/
-│   └── content_controller.py    # heredado de main (NewPostContent), saneado
-│
-├── services/
-│   ├── wordpress_site.py        # reescrito sobre la BD propia (ORM)
-│   ├── post.py                  # + claim atómico de pendientes
-│   ├── optimize.py              # + claim atómico + snapshot
-│   ├── execution.py             # ejecuciones persistidas (sustituye el tracker en memoria)
-│   └── schedule_config.py       # ← NUEVO: hora del scheduler persistida
-│
-├── models/                      # campaigns, wordpress_sites, posts,
-│                                # optimized_posts, executions, execution_logs,
-│                                # schedule_config
-├── schemas/
-├── utils/
-│   ├── image_resolver.py        # ← NUEVO: unifica Drive + prompt OpenAI
-│   ├── file_downloader.py       # heredado (ambas ramas)
-│   ├── massive_uploader.py      # heredado de main, con validación
-│   └── links.py                 # ← NUEVO: construcción de enlaces internos
-└── scripts/
-    └── wordpress_preflight.py   # heredado de post-orquestador
+│   ├── wordpress_client.py      # REST wp/v2
+│   └── post_bot_websocket.py    # worker del canal aislado
+├── core/
+│   ├── publishing_service.py    # núcleo compartido de publicación REST
+│   └── execution_logging.py     # ContextVar + persistencia buffered de logs
+├── controllers/                 # generación y orquestación de contenido
+├── services/                    # sitios WordPress, posts y optimización
+├── models/                      # campañas, sitios, posts y ejecuciones
+├── static/                      # dashboard local de cola e historial
+└── utils/                        # imágenes, carga masiva, horario y jobs
 ```
 
 ---
@@ -140,46 +116,39 @@ app/
 La base de datos vuelve a ser **propia del bot** (no la compartida del SEO
 Agent), con Alembic **activo** y sin el bloqueo `ALLOW_LEGACY_ALEMBIC`.
 
-### 5.1 `campaigns` — se le quitan las credenciales
+### 5.1 `campaigns` — referencia al sitio WordPress
 
 ```sql
 CREATE TABLE campaigns (
     id          SERIAL PRIMARY KEY,
     name        VARCHAR(100) NOT NULL UNIQUE,
-    slug        VARCHAR(100),
-    url         VARCHAR(255) NOT NULL,
-    domain      VARCHAR(255),
+    wordpress_site_id INTEGER NOT NULL REFERENCES wordpress_sites(id),
     is_active   BOOLEAN NOT NULL DEFAULT TRUE,
     created_at  TIMESTAMP NOT NULL DEFAULT now(),
     updated_at  TIMESTAMP
 );
--- ELIMINADAS: email, password  (migran a wordpress_sites)
+-- ELIMINADAS: url, email, password
 ```
 
-### 5.2 `wordpress_sites` — NUEVA, adaptada de la del SEO Agent
+### 5.2 `wordpress_sites` — credenciales fuera de la base de datos
 
 ```sql
 CREATE TABLE wordpress_sites (
     id              SERIAL PRIMARY KEY,
-    campaign_id     INTEGER NOT NULL REFERENCES campaigns(id) ON DELETE CASCADE,
-    wp_base_url     VARCHAR(255) NOT NULL,
-    wp_api_base_url VARCHAR(255),
-    auth_type       VARCHAR(50)  NOT NULL DEFAULT 'application_password',
+    name            VARCHAR(100) NOT NULL,
+    url             VARCHAR(500) NOT NULL,
     username        VARCHAR(255) NOT NULL,
-    credential_ref  VARCHAR(255) NOT NULL,   -- nombre de la variable en .env
-    rest_namespace  VARCHAR(50)  NOT NULL DEFAULT 'wp/v2',
+    credential_ref  VARCHAR(120) NOT NULL UNIQUE, -- nombre de variable .env
     yoast_enabled   BOOLEAN      NOT NULL DEFAULT TRUE,
-    active          BOOLEAN      NOT NULL DEFAULT TRUE,
+    is_active       BOOLEAN      NOT NULL DEFAULT TRUE,
     created_at      TIMESTAMP    NOT NULL DEFAULT now(),
     updated_at      TIMESTAMP
 );
-CREATE UNIQUE INDEX ux_wordpress_sites_active_campaign
-    ON wordpress_sites (campaign_id) WHERE active;
 ```
 
-> El índice único parcial resuelve de raíz la ambigüedad que en
-> `post-orquestador` se tapaba con un `warning` ("varios sitios activos, uso el
-> id más bajo"): **una campaña activa tiene como mucho un sitio activo**.
+La migración inicial crea un sitio por cada campaña anterior y los enlaza con
+`campaigns.wordpress_site_id`. El ORM permite que varias campañas apunten al
+mismo sitio si se configura así; la guía no impone exclusividad por sitio.
 
 ### 5.3 `posts` — estado explícito en vez de booleano
 
@@ -187,7 +156,7 @@ Se conservan todas las columnas de `main` y se añaden:
 
 ```sql
 ALTER TABLE posts
-    ADD COLUMN state        VARCHAR(20) NOT NULL DEFAULT 'pending',
+    ADD COLUMN state        VARCHAR(24) NOT NULL DEFAULT 'pending',
         -- pending | claimed | running | done | failed
     ADD COLUMN attempts     INTEGER NOT NULL DEFAULT 0,
     ADD COLUMN last_error   TEXT,
@@ -195,9 +164,8 @@ ALTER TABLE posts
     ADD COLUMN published_at TIMESTAMP,
     ADD COLUMN wp_post_id   INTEGER,
     ADD COLUMN wp_post_url  TEXT,
-    ADD COLUMN image_prompt TEXT,     -- alternativa al enlace de Drive
-    ADD COLUMN source       VARCHAR(20) NOT NULL DEFAULT 'excel';
-        -- excel | api | orchestrator
+    ADD COLUMN image_prompt TEXT;    -- alternativa al enlace de Drive
+ALTER TABLE posts DROP COLUMN status;
 CREATE INDEX ix_posts_pending ON posts (state, date);
 ```
 
@@ -210,34 +178,23 @@ CREATE INDEX ix_posts_pending ON posts (state, date);
 > post sigue sin reintentarse solo (§10.4) — pero lo hacen visible en la cola y
 > permiten relanzarlo a mano.
 
-### 5.4 `optimized_posts` — se añade la identidad del post remoto y el snapshot
+### 5.4 `optimized_posts` — identidad remota, estado y snapshot
 
-Mismas columnas nuevas que `posts`, más:
+La migración anterior ya añade `image_prompt`, `wp_post_id`, `wp_route` (varchar 16),
+`slug`, `previous_snapshot`, `last_error`, `attempts`, `state` y `claimed_at`.
+La migración actual añade `optimized_at` y retira el booleano `status`:
 
 ```sql
 ALTER TABLE optimized_posts
-    ADD COLUMN wp_post_id        INTEGER,
-    ADD COLUMN wp_route          VARCHAR(20),   -- 'posts' | 'pages'
-    ADD COLUMN previous_title    TEXT,
-    ADD COLUMN previous_content  TEXT,
-    ADD COLUMN previous_meta     JSONB,
-    ADD COLUMN previous_slug     TEXT,
-    ADD COLUMN optimized_at      TIMESTAMP;
+    ADD COLUMN optimized_at TIMESTAMP,
+    DROP COLUMN status;
 ```
 
-El *snapshot* (`previous_*`) se escribe **antes** de tocar WordPress. Es la red
-de seguridad del flujo de optimización, que por definición no puede usar el
-truco de "crear borrador y publicar al final".
-
-`previous_meta` guarda el bloque `meta` completo tal como lo devolvió
-`GET {route}/{id}?context=edit`, **incluido `_elementor_edit_mode`**. El
-rollback (`POST /api/optimized/{id}/rollback`) reenvía título, contenido, slug y
-ese mismo bloque de metas en una sola petición, de modo que un post que estaba
-en modo `builder` **vuelve a renderizarse con Elementor**: su `_elementor_data`
-nunca se tocó, así que basta con devolver el meta a `builder`.
-
-> Sin ese detalle el rollback dejaría el post con el contenido antiguo pero ya
-> fuera de Elementor, que no es el estado original.
+Para la cola local, `previous_snapshot` es JSON serializado con título,
+contenido, slug, categorías, etiquetas, imagen destacada y metas REST; se guarda
+antes de escribir y lo usa el endpoint de rollback. Para el canal externo, el
+snapshot vive en `executions.result`, porque ese trabajo no crea una fila local
+en `optimized_posts`.
 
 ### 5.5 `executions` y `execution_logs` — NUEVAS
 
@@ -251,7 +208,8 @@ CREATE TABLE executions (
     kind           VARCHAR(20) NOT NULL,  -- create | optimize
     campaign_id    INTEGER REFERENCES campaigns(id),
     post_id        INTEGER,               -- posts.id u optimized_posts.id
-    external_id    VARCHAR(100),          -- execution_id del orquestador
+    external_id    VARCHAR(160) UNIQUE,   -- execution_id o idempotency key
+    payload_hash   VARCHAR(64),
     status         VARCHAR(20) NOT NULL,  -- queued|running|completed|failed
     title          TEXT,
     result         JSONB,
@@ -269,6 +227,7 @@ CREATE TABLE execution_logs (
     message      TEXT NOT NULL
 );
 CREATE INDEX ix_execution_logs_exec ON execution_logs (execution_id, id);
+CREATE INDEX ix_execution_logs_execution_id ON execution_logs (execution_id);
 ```
 
 Se conserva el mecanismo de `ContextVar` + handler de `logging` de
@@ -280,11 +239,12 @@ hacer un `INSERT` por línea de log.
 
 ```sql
 CREATE TABLE schedule_config (
-    id          SMALLINT PRIMARY KEY DEFAULT 1 CHECK (id = 1),
+    id          INTEGER PRIMARY KEY,
     hour        VARCHAR(5) NOT NULL DEFAULT '02:00',
     timezone    VARCHAR(50) NOT NULL DEFAULT 'America/Bogota',
     enabled     BOOLEAN NOT NULL DEFAULT TRUE,
-    updated_at  TIMESTAMP NOT NULL DEFAULT now()
+    created_at  TIMESTAMP NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMP
 );
 ```
 
@@ -358,7 +318,7 @@ sola vez.**
 ```
  1. Resolver el post remoto            → PostRef(route, id)
  2. GET {route}/{id}?context=edit      → estado actual + _elementor_edit_mode
- 3. Guardar snapshot en la BD          → previous_title/content/meta/slug
+ 3. Guardar snapshot antes de escribir → previous_snapshot (local) o execution.result (externo)
  4. Resolver categorías y etiquetas    → ids
  5. Subir la imagen nueva (si la hay)  → media_id
  6. UNA sola escritura:
@@ -866,13 +826,14 @@ Para reintentarlo hay dos vías explícitas, ambas a petición de una persona:
 | `/api/posts/upload/optimized` | POST | `main` | Carga masiva `.xlsx` de posts a optimizar |
 | `/api/posts/{id}/run` | POST | nuevo | Fuerza ahora un post concreto de la BD |
 | `/api/optimized/{id}/run` | POST | nuevo | Fuerza ahora una optimización concreta |
-| `/api/optimized/{id}/rollback` | POST | nuevo | Restaura el snapshot `previous_*` |
-| `/api/post/create` | POST | `post-orq.` | Publicación directa (payload completo) |
+| `/api/optimized/{id}/rollback` | POST | nuevo | Restaura el snapshot `previous_snapshot` |
+| `/api/orchestrator/jobs` | POST | worker interno | Callback autenticado del canal WebSocket |
 | `/api/executions` | GET | nuevo | Lista ejecuciones, filtrable por canal y estado |
-| `/api/executions/{id}` | GET | `post-orq.` | Estado + log en vivo |
+| `/api/executions/{id}` | GET | nuevo | Estado persistido + logs |
+| `/api/queue` | GET | nuevo | Cola local, filtrable por tipo y estado |
 
-Se conserva la interfaz web de `post-orquestador` (`app/static/`) y se le añaden
-dos vistas: **cola de posts programados** y **historial de ejecuciones**.
+La interfaz local `app/static/` se sirve en `/dashboard/` y ofrece dos vistas:
+**cola de posts programados** e **historial de ejecuciones**.
 
 ### Carga masiva: validación previa
 
@@ -895,62 +856,59 @@ pero se añade:
 
 ## 12. Canal 3 — Orquestador, independiente
 
-`channels/orchestrator.py`. Reutiliza
-[app/clients/websocket_client.py](../app/clients/websocket_client.py) sin cambios.
+El worker se implementa en `app/clients/post_bot_websocket.py` y se inicia desde
+el `lifespan` de `app/main.py` cuando `ORCHESTRATOR_ENABLED=true`. Se conecta
+exclusivamente a `POST_BOT_WS_URL`, cuyo valor por defecto es
+`/api/v1/post-bot/ws`; no se registra en `/api/v1/bots/ws`, porque ese canal
+puede avanzar workflows SEO.
+
+El worker registra `posts.create` y `posts.optimize`, reporta heartbeat y slots,
+recibe `execution.run` y retransmite los resultados. El input se descarga con
+Bearer desde el endpoint del mismo orquestador cuando viene como `input_url`, o
+se toma del payload inline. Luego llama el endpoint interno
+`POST /api/orchestrator/jobs` con `ORCHESTRATOR_TOKEN` e `Idempotency-Key`.
+Este callback reutiliza `PublishingService`; el navegador no usa este endpoint ni
+el WebSocket.
 
 El requisito es que este canal sea **independiente del flujo de páginas
 original**. Se materializa en cinco separaciones concretas:
 
 | Separación | Implementación |
 |---|---|
-| **Identidad propia** | `bot_key = "post-bot-v3-<hostname>"`, distinto del bot de la rama anterior, para que ambos puedan coexistir durante la transición |
+| **Identidad propia** | `POST_BOT_BOT_KEY` y `POST_BOT_NAME` configuran la identidad del worker del canal aislado |
 | **Capacidades propias** | `capabilities = ["posts.create", "posts.optimize"]` — el orquestador puede pedir **ambas** cosas |
-| **Concurrencia propia** | `ThreadPoolExecutor` dedicado, con `ORCHESTRATOR_MAX_CONCURRENCY`. Una carga de 200 posts desde Excel **no** consume los slots del orquestador, y viceversa |
-| **Estado propio** | Los trabajos del orquestador **no escriben en `posts` ni en `optimized_posts`**. Viven solo en `executions` con `source = 'orchestrator'` y `external_id = execution_id`. No tienen `state`, ni `attempts`, ni entran en el barrido del scheduler |
+| **Concurrencia propia** | Worker asíncrono limitado por `ORCHESTRATOR_MAX_CONCURRENCY`; el scheduler usa `LOCAL_MAX_CONCURRENCY` |
+| **Estado propio** | Los trabajos externos se guardan en `executions` con `source = 'orchestrator'` y `external_id`; no se encolan en `posts` ni `optimized_posts` |
 | **Ciclo de vida propio** | `ORCHESTRATOR_ENABLED` y `SCHEDULER_ENABLED` son flags separados. El servicio arranca y funciona con cualquiera de los dos apagado |
 
-### 12.1 Flujo de un `execution.run`
+### 12.1 Flujo de un trabajo
 
-Se hereda de `post-orquestador` (§4 de su documento): carga el input desde
-`input_url` o `payload`, extrae los posts de forma tolerante, resuelve la
-campaña por id / nombre / URL, normaliza los alias de campos y publica uno por
-uno, devolviendo `partial_posts` si el lote falla a la mitad.
+1. El orquestador entrega `execution.run` por `/api/v1/post-bot/ws`.
+2. El worker reporta `execution.started`, obtiene input y llama el callback local.
+3. El callback normaliza posts, resuelve campaña y crea una ejecución por lote
+   y por elemento; luego invoca el handler `posts.create` o `posts.optimize`.
+4. `PublishingService` escribe en WordPress. Los logs se asocian a la ejecución
+   con `ContextVar` y se persisten en `execution_logs`.
+5. El worker reporta el resultado y, al reconectar, reenvía resultados sin ACK.
 
-**Novedad de v3:** se despacha según `capability`:
+`posts.optimize` requiere `edition_url`, `post_url` o `wp_post_id`. El snapshot
+se guarda en el resultado de la ejecución externa; las optimizaciones locales
+lo conservan en `optimized_posts` para rollback.
 
-```python
-CAPABILITY_HANDLERS = {
-    "posts.create":   _handle_create,    # → PublishingService.publish()
-    "posts.optimize": _handle_optimize,  # → PublishingService.optimize()
-}
-```
+### 12.2 Idempotencia y errores parciales
 
-Para `posts.optimize`, el payload debe traer un destino: `edition_url`,
-`post_url` o `wp_post_id`. Se aplican los mismos alias tolerantes que en el
-resto del normalizador.
-
-### 12.2 Reentrada y duplicados
-
-Se conserva la deduplicación por `execution_id` en memoria del cliente
-WebSocket, y se refuerza con una **restricción única en base de datos**:
-
-```sql
-CREATE UNIQUE INDEX ux_executions_external
-    ON executions (external_id) WHERE external_id IS NOT NULL;
-```
-
-Si el orquestador reenvía un `execution_id` ya completado tras una reconexión,
-el bot devuelve el resultado guardado en vez de volver a publicar.
+`external_id` tiene restricción única. Reutilizarlo con otro hash responde `409`;
+una ejecución completada con el mismo contenido devuelve su resultado. Los
+lotes registran éxitos y errores por elemento (`partial_posts`/`errors`).
 
 ---
 
 ## 13. Concurrencia
 
-```python
-# core/worker_pool.py
-local_pool        = ThreadPoolExecutor(max_workers=LOCAL_MAX_CONCURRENCY)         # scheduler + API
-orchestrator_pool = ThreadPoolExecutor(max_workers=ORCHESTRATOR_MAX_CONCURRENCY)  # WebSocket
-```
+El scheduler ejecuta los dos barridos en un `ThreadPoolExecutor` local con
+`LOCAL_MAX_CONCURRENCY`. El worker WebSocket gestiona hasta
+`ORCHESTRATOR_MAX_CONCURRENCY` tareas asíncronas y el callback usa el threadpool
+de FastAPI para sus handlers síncronos.
 
 Reglas:
 
@@ -959,11 +917,11 @@ Reglas:
 - **Un `WordPressClient` por tarea** (es un context manager con su propia
   `requests.Session`).
 - Los `available_slots` que el bot reporta en el `bot.heartbeat` salen **solo**
-  del `orchestrator_pool`. Lo que haga el scheduler no altera lo que el
+  del worker WebSocket. Lo que haga el scheduler no altera lo que el
   orquestador cree que hay disponible.
-- Límite de concurrencia **por sitio WordPress** (semáforo por `site_id`,
-  por defecto 1) para no disparar los rate limits del hosting ni crear dos
-  categorías iguales a la vez.
+- Límite de concurrencia **por sitio WordPress** mediante advisory lock de
+  PostgreSQL (una escritura a la vez por `site_id`) para no disparar rate limits
+  ni crear categorías duplicadas.
 
 ---
 
@@ -986,13 +944,16 @@ SCHEDULER_TIMEZONE=America/Bogota   # semilla de schedule_config; manda la BD
 
 # Canal orquestador (independiente del anterior)
 ORCHESTRATOR_ENABLED=true
-WEBSOCKET=ws://10.0.0.92:8001/api/v1/bots/ws
-HTTP_TIMEOUT=30
+ORCHESTRATOR_TOKEN=...                 # bearer del callback interno
+POST_BOT_WS_URL=ws://orquestador:8005/api/v1/post-bot/ws
+POST_BOT_WS_TOKEN=...                  # token del worker en BOT_TOKENS
+POST_BOT_BOT_KEY=post-bot-prod-01
+POST_BOT_NAME=AI WordPress Post Bot
+POST_BOT_CALLBACK_URL=http://127.0.0.1:8000/api/orchestrator/jobs
 ORCHESTRATOR_MAX_CONCURRENCY=2
 
 # Concurrencia local
 LOCAL_MAX_CONCURRENCY=3
-SITE_MAX_CONCURRENCY=1
 
 # OpenAI
 OPENAI_API_KEY=...
@@ -1021,7 +982,7 @@ Cada fase debe quedar desplegable y verificable por sí sola.
 | Fase | Alcance | Criterio de aceptación |
 |---|---|---|
 | **F0 — Base** | Esquema propio: `campaigns` sin credenciales, `wordpress_sites`, `executions`, `schedule_config`. Migración de datos desde la BD de `main`: `campaigns.email` → `wordpress_sites.username`, y una Application Password nueva en `.env` por cada sitio | `python -m app.scripts.wordpress_preflight --campaign <id>` pasa para **todas** las campañas activas |
-| **F1 — Núcleo de creación** | Portar `WordPressClient` y `PublishingService.publish()` desde `post-orquestador` sobre el nuevo `WordPressSiteService` (ORM, BD propia) | Un post creado por `POST /api/post/create` sale idéntico al de `post-orquestador` |
+| **F1 — Núcleo de creación** | Portar `WordPressClient` y `PublishingService.publish()` desde `post-orquestador` sobre el nuevo `WordPressSiteService` (ORM, BD propia) | Un post creado por `POST /api/orchestrator/jobs` sale idéntico al de `post-orquestador` |
 | **F2 — Contenido** | Portar `NewPostContent` con las correcciones de §7. `utils/links.py`. `image_resolver` unificado | Un post generado desde un registro de `posts` (título + keywords + Drive) queda publicado y es indistinguible del que producía `main` |
 | **F3 — Scheduler y Excel** | `state`/`attempts`, claim atómico, `schedule_config`, uploader con validación previa | Cargar un Excel de 10 filas, esperar a la hora programada y ver 10 posts publicados y 10 filas en `executions`. Arrancar dos instancias y comprobar que no hay duplicados |
 | **F4 — Optimización REST** | `resolve_post_ref`, `update_post`, snapshot, rollback, reset de `_elementor_edit_mode`, MU-plugin v2 | Optimizar un post clásico y verificar el resultado. Optimizar uno de Elementor y comprobar que **queda renderizado con el contenido nuevo** y que `_elementor_data` sigue intacto. Probar el rollback en ambos |
@@ -1179,7 +1140,7 @@ algo no está aquí, no está cubierto.
 | 33 | **El slug NO se toca** | `keep_slug = True` por defecto — verificado contra `main`, no es una suposición | §6.1, §6.3 |
 | 34 | Imagen destacada **siempre** reemplazada | `keep_featured_image = False` por defecto | §6.1, §8 |
 | 35 | El post sigue publicado (botón Actualizar) | no se envía `status` en el `POST` | §6.3 |
-| 36 | Sin forma de deshacer | snapshot `previous_*` + endpoint de rollback | §5.4, §11 |
+| 36 | Sin forma de deshacer | snapshot `previous_snapshot` + endpoint de rollback local | §5.4, §11 |
 
 ### Cobertura
 

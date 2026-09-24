@@ -1,101 +1,128 @@
-"""Atomic scheduler jobs. Every item is claimed before any network/AI work starts."""
+"""Atomic scheduler jobs with one durable execution row per post."""
 
 import logging
-import json
-from datetime import datetime, time, timedelta
-from zoneinfo import ZoneInfo
+from datetime import datetime
 
-from sqlalchemy import and_, or_, update
+from sqlalchemy import text, update
 
 from app.controllers.orchestrator import PostOrchestrator
+from app.core.execution_logging import execution_context, flush_execution_logs
 from app.models.execution import Execution
 from app.models.optimize import OptimizedPost
 from app.models.post import Post
 from config.database import SessionLocal
-from app.utils.time import get_schedule_config
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
 
-def _today_window() -> tuple[datetime, datetime]:
-    local_now = datetime.now(ZoneInfo(get_schedule_config()["timezone"]))
-    start = datetime.combine(local_now.date(), time.min)
-    return start, start + timedelta(days=1)
+def _claim_due_ids(db, model, *, limit: int) -> list[int]:
+    """Claim due rows in one UPDATE; SKIP LOCKED prevents competing workers."""
+    table = model.__tablename__
+    result = db.execute(text(f"""
+        UPDATE {table}
+        SET state = 'claimed', claimed_at = now(), attempts = attempts + 1
+        WHERE id IN (
+            SELECT id FROM {table}
+            WHERE state = 'pending'
+              AND date::date = (now() AT TIME ZONE :timezone)::date
+            ORDER BY date, id
+            FOR UPDATE SKIP LOCKED
+            LIMIT :batch_size
+        )
+        RETURNING id
+    """), {"timezone": _timezone(db), "batch_size": limit})
+    ids = [int(row[0]) for row in result.fetchall()]
+    db.commit()
+    return ids
 
 
-def _claim(db, model, item_id: int) -> bool:
-    now = datetime.utcnow()
-    stale_before = now - timedelta(seconds=900)
-    result = db.execute(
+def _timezone(db) -> str:
+    from app.models.schedule_config import ScheduleConfig
+
+    row = db.query(ScheduleConfig).filter(ScheduleConfig.id == 1).first()
+    return row.timezone if row else settings.SCHEDULER_TIMEZONE
+
+
+def _mark_stale_claimed_failed(db, model) -> None:
+    """Surface abandoned claims; never silently republish them on a later run."""
+    db.execute(
         update(model)
-        .where(model.id == item_id, model.status.is_(False), or_(
-            model.state == "pending",
-            and_(model.state == "running", model.claimed_at < stale_before),
-        ))
-        .values(state="running", attempts=model.attempts + 1, claimed_at=now)
-        .execution_options(synchronize_session=False)
+        .where(model.state.in_(["claimed", "running"]), model.claimed_at < text("now() - interval '30 minutes'"))
+        .values(state="failed", last_error="Execution interrupted before completion", claimed_at=None)
     )
     db.commit()
-    return result.rowcount == 1
 
 
 def _finish(db, model, item_id: int, *, error: str | None = None) -> None:
     item = db.query(model).filter(model.id == item_id).first()
-    if not item:
-        return
-    item.state = "failed" if error else "succeeded"
-    item.status = not error
-    item.last_error = error[:4000] if error else None
-    item.claimed_at = None
-    db.commit()
+    if item:
+        item.state = "failed" if error else "done"
+        item.last_error = error[:4000] if error else None
+        item.claimed_at = None
+        db.commit()
 
 
 def _run(model, capability: str) -> None:
     db = SessionLocal()
     try:
-        start, end = _today_window()
-        now = datetime.utcnow()
-        stale_before = now - timedelta(seconds=900)
-        ids = [row[0] for row in db.query(model.id).filter(
-            model.date >= start, model.date < end, model.status.is_(False), or_(
-                model.state == "pending",
-                and_(model.state == "running", model.claimed_at < stale_before),
-            )
-        ).order_by(model.id).all()]
-        logger.info("Scheduler found %d pending items for %s", len(ids), capability)
+        _mark_stale_claimed_failed(db, model)
+        ids = _claim_due_ids(db, model, limit=settings.SCHEDULER_BATCH_SIZE)
+        logger.info("Scheduler claimed %d pending items for %s", len(ids), capability)
         orchestrator = PostOrchestrator(db)
         for item_id in ids:
-            if not _claim(db, model, item_id):
-                continue
             item = db.query(model).filter(model.id == item_id).first()
+            if item is None or item.state != "claimed":
+                continue
+            item.state = "running"
+            db.commit()
             external_id = f"scheduler:{capability}:{item_id}"
             execution = db.query(Execution).filter(Execution.external_id == external_id).first()
-            if execution and execution.status == "succeeded":
-                item.state, item.status, item.claimed_at = "succeeded", True, None
+            if execution and execution.status == "completed":
+                item.state, item.claimed_at = "done", None
                 db.commit()
                 continue
             if execution is None:
-                execution = Execution(external_id=external_id, source="scheduler",
-                                      capability=capability, status="running")
+                execution = Execution(
+                    source="scheduler", kind="optimize" if capability.endswith("optimize") else "create",
+                    campaign_id=item.campaign_id, post_id=item.id, external_id=external_id,
+                    status="running", title=item.title, started_at=datetime.utcnow(),
+                )
                 db.add(execution)
             else:
                 execution.status, execution.error = "running", None
+                execution.result = None
+                execution.started_at = datetime.utcnow()
+                execution.completed_at = None
             db.commit()
             try:
-                if capability == "posts.create":
-                    result = orchestrator.create_new_post(item.campaign_id, item, item.language,
-                                                          external_id=external_id)
-                else:
-                    result = orchestrator.optimize_post(item.campaign_id, item, item.language)
-                _finish(db, model, item_id)
-                execution.status = "succeeded"
-                execution.result = json.dumps(result, ensure_ascii=False)[:16000]
+                with execution_context(execution.id):
+                    logger.info("Starting %s for post %s", capability, item_id)
+                    if capability == "posts.create":
+                        result = orchestrator.create_new_post(
+                            item.campaign_id, item, item.language, external_id=external_id
+                        )
+                    else:
+                        result = orchestrator.optimize_post(item.campaign_id, item, item.language)
+                    _finish(db, model, item_id)
+                    execution.status = "completed"
+                    execution.result = result
+                    execution.completed_at = datetime.utcnow()
+                    db.commit()
+                    logger.info("Completed %s for post %s", capability, item_id)
+                flush_execution_logs()
             except Exception as exc:
-                logger.exception("Scheduled %s item %s failed", capability, item_id)
+                db.rollback()
+                with execution_context(execution.id):
+                    logger.exception("Scheduled %s item %s failed", capability, item_id)
                 _finish(db, model, item_id, error=str(exc))
-                execution.status = "failed"
-                execution.error = str(exc)[:4000]
-            db.commit()
+                execution = db.query(Execution).filter(Execution.external_id == external_id).first()
+                if execution:
+                    execution.status = "failed"
+                    execution.error = str(exc)[:4000]
+                    execution.completed_at = datetime.utcnow()
+                    db.commit()
+                flush_execution_logs()
     finally:
         db.close()
 

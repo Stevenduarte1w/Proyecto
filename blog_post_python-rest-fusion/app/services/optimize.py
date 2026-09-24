@@ -79,7 +79,8 @@ class OptimizedPostService:
         optimized_post = query.first()
         if not optimized_post:
             return None
-        optimized_post.status = True
+        optimized_post.state = "done"
+        optimized_post.optimized_at = datetime.utcnow()
         optimized_post.updated_at = datetime.now()
         self.db.commit()
         self.db.refresh(optimized_post)

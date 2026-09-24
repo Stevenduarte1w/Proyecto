@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import random
 import time
 from typing import Any
@@ -13,6 +12,7 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 import websockets
+from config.settings import settings
 
 logger = logging.getLogger(__name__)
 
@@ -21,15 +21,12 @@ class PostBotWebSocketWorker:
     """Connect, accept post jobs, delegate to the bot's REST ingress, and ACK."""
 
     def __init__(self) -> None:
-        self.url = os.getenv(
-            "POST_BOT_WS_URL", "ws://localhost:8005/api/v1/post-bot/ws"
-        ).strip()
-        self.token = os.getenv("POST_BOT_WS_TOKEN", "").strip()
-        self.bot_key = os.getenv("POST_BOT_BOT_KEY", "post-bot-prod-01").strip()
-        self.name = os.getenv("POST_BOT_NAME", "AI WordPress Post Bot").strip()
-        self.callback_url = os.getenv(
-            "POST_BOT_CALLBACK_URL", "http://127.0.0.1:8000/api/orchestrator/jobs"
-        ).strip()
+        self.url = settings.POST_BOT_WS_URL.strip()
+        self.token = settings.POST_BOT_WS_TOKEN.strip()
+        self.bot_key = settings.POST_BOT_BOT_KEY.strip()
+        self.name = settings.POST_BOT_NAME.strip()
+        self.callback_url = settings.POST_BOT_CALLBACK_URL.strip()
+        self.max_concurrency = max(1, settings.ORCHESTRATOR_MAX_CONCURRENCY)
         self.capabilities = ["posts.create", "posts.optimize"]
         self._active: dict[str, asyncio.Task[None] | None] = {}
         self._pending_results: dict[str, dict[str, Any]] = {}
@@ -60,8 +57,8 @@ class PostBotWebSocketWorker:
                         "bot_type": "create_post",
                         "capabilities": self.capabilities,
                         "version": "3.1.0",
-                        "max_concurrency": 1,
-                        "available_slots": 1 if not self._active else 0,
+                        "max_concurrency": self.max_concurrency,
+                        "available_slots": max(0, self.max_concurrency - len(self._active)),
                         "active_jobs": list(self._active),
                         "metadata": {"runtime": "python", "publisher": "wordpress-rest"},
                     }))
@@ -103,7 +100,7 @@ class PostBotWebSocketWorker:
             await self._send(websocket, {
                 "type": "bot.heartbeat",
                 "current_jobs": len(self._active),
-                "available_slots": max(0, 1 - len(self._active)),
+                "available_slots": max(0, self.max_concurrency - len(self._active)),
             })
 
     async def _handle_message(self, websocket: Any, message: dict[str, Any]) -> None:
@@ -134,7 +131,7 @@ class PostBotWebSocketWorker:
             await self._send(websocket, {
                 "type": "bot.heartbeat",
                 "current_jobs": len(self._active),
-                "available_slots": max(0, 1 - len(self._active)),
+                "available_slots": max(0, self.max_concurrency - len(self._active)),
             })
         elif kind == "error":
             logger.error("Orchestrator error %s: %s", message.get("code"), message.get("message"))
@@ -199,7 +196,7 @@ class PostBotWebSocketWorker:
 
     def _submit(self, request_body: dict[str, Any]) -> dict[str, Any]:
         headers = {
-            "Authorization": f"Bearer {os.getenv('ORCHESTRATOR_TOKEN', '').strip()}",
+            "Authorization": f"Bearer {settings.ORCHESTRATOR_TOKEN.strip()}",
             "Idempotency-Key": str(request_body["execution_id"]),
         }
         deadline = time.monotonic() + 1800

@@ -23,7 +23,6 @@ class OptimizedPostCreate(BaseModel):
     image: str | None = None
     image_prompt: str | None = None
     categories: str | None = None
-    status: bool = False
 
 
 class OptimizedPostUpdate(BaseModel):
@@ -44,7 +43,7 @@ class OptimizedPostUpdate(BaseModel):
     image_prompt: str | None = None
     categories: str | None = None
     date: datetime | None = None
-    status: bool | None = None
+    state: str | None = None
     edition_url: str | None = None
 
 
@@ -68,7 +67,7 @@ class OptimizedPostResponse(BaseModel):
     categories: str | None = None
     date: datetime
     campaign_id: int
-    status: bool
+    state: str
     created_at: datetime
     updated_at: datetime | None = None
     edition_url: str | None = None

@@ -3,8 +3,9 @@
 > Endpoint WebSocket que **asigna trabajo** al bot de posts (`posts.create` y
 > `posts.optimize`) manteniéndolo **fuera del motor de workflows SEO**.
 >
-> Implementado en el orquestador. El cliente del bot necesita un ajuste mínimo
-> (§7) que **todavía no está hecho**.
+> Implementado en el orquestador. El cliente worker está en
+> `blog_post_python-rest-fusion/app/clients/post_bot_websocket.py`; conecta a
+> este canal y envía los trabajos al callback autenticado del bot.
 
 ---
 

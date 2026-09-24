@@ -69,7 +69,8 @@ class PostService:
         if not post:
             return None
 
-        post.status = True
+        post.state = "done"
+        post.published_at = datetime.utcnow()
         post.updated_at = datetime.now()
         self.db.commit()
         self.db.refresh(post)
